@@ -46,7 +46,7 @@
 
 <div class="card">
   <div class="controls">
-    <input id="thickness" type="range" min="0" max="45" step="0.5" value="6">
+    <input id="thickness" type="range" min="0" max="45" step="0.5" value="0">
     <label for="thickness" style="white-space:nowrap;color:var(--muted)">Insulation thickness, t (mm)</label>
   </div>
   <div class="readout" id="readout"></div>
@@ -69,9 +69,10 @@
     radius is r<sub>cr</sub> = k/h = 11 mm, i.e. an insulation thickness of <b>6 mm</b>.
   </p>
   <p class="foot">
-    Below r<sub>cr</sub>, adding insulation <i>increases</i> heat transfer (R'<sub>cond</sub> grows slower than
-    R'<sub>conv</sub> shrinks). Above r<sub>cr</sub>, adding insulation <i>decreases</i> heat transfer. Drag the
-    slider — the marker on R'<sub>tot</sub> (dark curve) traces the minimum at t = 6 mm.
+    Drag the slider from 0 outward — each curve draws itself as you go, and the vertical line
+    tracks your current thickness, marking exactly where it crosses R'<sub>cond</sub>, R'<sub>conv</sub>,
+    and R'<sub>tot</sub>. The faint background traces show the full curves for context. Watch the dark
+    curve dip to its lowest point (maximum heat transfer) near t = 6 mm, then rise again.
   </p>
 </div>
 
@@ -94,9 +95,9 @@ function css(name){ return getComputedStyle(document.documentElement).getPropert
 const TMAX=45, YMAX=9.0, YMIN=0.0;
 const CSS_W=1000, CSS_H=430; // logical (CSS-pixel) drawing size; backing store is scaled below
 
-// Pre-sample all three curves once, finely, and reuse for BOTH drawing and the
-// minimum marker — so the marker is guaranteed to sit exactly on the drawn
-// curve instead of being computed from a separate formula.
+// Pre-sample all three curves once, finely, and reuse for drawing, the
+// progressive reveal, AND the minimum marker — so everything drawn on screen
+// (curves, moving dots, reference line) comes from exactly the same data.
 const STEP=0.05;
 const samples = [];
 for(let tt=0; tt<=TMAX+1e-9; tt+=STEP){ samples.push({t: tt, v: values(tt)}); }
@@ -145,33 +146,62 @@ function draw(){
   ctx.strokeStyle=css('--text'); ctx.lineWidth=1.4;
   ctx.beginPath(); ctx.moveTo(L,B); ctx.lineTo(R,B); ctx.moveTo(L,T); ctx.lineTo(L,B); ctx.stroke();
 
-  ctx.fillStyle=css('--text');
+  ctx.fillStyle=css('--text'); ctx.font='13px Calibri, Arial';
   ctx.fillText('Insulation thickness, t (mm)', (L+R)/2-90, B+40);
   ctx.save(); ctx.translate(16,(T+B)/2+80); ctx.rotate(-Math.PI/2);
   ctx.fillText("Thermal resistance per unit length, R' (m·K/W)",0,0); ctx.restore();
 
-  function curve(pick, color, width){
-    ctx.strokeStyle=color; ctx.lineWidth=width; ctx.beginPath();
+  // faint full-domain trace, for context on the shape ahead of the slider
+  function ghost(pick, color){
+    ctx.globalAlpha=0.16; ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath();
     samples.forEach((s,i)=>{
       const px=x(s.t), py=y(Math.min(pick(s.v),YMAX));
       if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
     });
+    ctx.stroke(); ctx.globalAlpha=1;
+  }
+  ghost(vv=>vv.Rcond, condCol);
+  ghost(vv=>vv.Rconv, convCol);
+  ghost(vv=>vv.Rtot, totCol);
+
+  // curves actually "build" as the slider moves: drawn only up to the current t
+  function curveUpTo(pick, color, width, tNow){
+    ctx.strokeStyle=color; ctx.lineWidth=width; ctx.beginPath();
+    let started=false;
+    for(const s of samples){
+      if(s.t > tNow) break;
+      const px=x(s.t), py=y(Math.min(pick(s.v),YMAX));
+      if(!started){ ctx.moveTo(px,py); started=true; } else ctx.lineTo(px,py);
+    }
+    // finish exactly at the slider's value (not just the nearest sample)
+    const vEnd=values(tNow);
+    const pxEnd=x(tNow), pyEnd=y(Math.min(pick(vEnd),YMAX));
+    if(started) ctx.lineTo(pxEnd,pyEnd); else ctx.moveTo(pxEnd,pyEnd);
     ctx.stroke();
   }
-  curve(vv=>vv.Rcond, condCol, 2.5);
-  curve(vv=>vv.Rconv, convCol, 2.5);
-  curve(vv=>vv.Rtot, totCol, 3.2);
+  curveUpTo(vv=>vv.Rcond, condCol, 2.6, t);
+  curveUpTo(vv=>vv.Rconv, convCol, 2.6, t);
+  curveUpTo(vv=>vv.Rtot, totCol, 3.3, t);
 
-  // minimum marker line — taken from the same sampled array as the curves above,
-  // so it is guaranteed to sit exactly on the drawn R'tot minimum
-  ctx.strokeStyle=muted; ctx.setLineDash([6,6]); ctx.lineWidth=1.3;
+  // subtle static reference at the true minimum of R'tot (from the same sampled data)
+  ctx.strokeStyle=muted; ctx.setLineDash([3,4]); ctx.lineWidth=1;
   ctx.beginPath(); ctx.moveTo(x(tMin),T); ctx.lineTo(x(tMin),B); ctx.stroke(); ctx.setLineDash([]);
-  ctx.fillStyle=muted; ctx.fillText(`min. R'tot at t ≈ ${tMin.toFixed(1)} mm`, x(tMin)+8, T+16);
+  ctx.fillStyle=muted; ctx.font='11px Calibri, Arial';
+  ctx.fillText(`min. R'tot at t ≈ ${tMin.toFixed(1)} mm`, x(tMin)+6, T+12);
 
-  // moving marker on total curve
-  ctx.fillStyle=totCol;
-  ctx.beginPath(); ctx.arc(x(t), y(Math.min(v.Rtot,YMAX)), 6.5, 0, 2*Math.PI); ctx.fill();
-  ctx.strokeStyle=css('--bg'); ctx.lineWidth=2; ctx.stroke();
+  // the moving vertical line, tracking the slider live
+  ctx.strokeStyle=css('--text'); ctx.lineWidth=1.6; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(x(t),T); ctx.lineTo(x(t),B); ctx.stroke();
+
+  // intersection markers: exactly where that line crosses each curve right now
+  function dot(val, color){
+    ctx.beginPath(); ctx.arc(x(t), y(Math.min(val,YMAX)), 6, 0, 2*Math.PI);
+    ctx.fillStyle=color; ctx.fill();
+    ctx.strokeStyle=css('--bg'); ctx.lineWidth=2; ctx.stroke();
+  }
+  dot(v.Rcond, condCol);
+  dot(v.Rconv, convCol);
+  dot(v.Rtot, totCol);
 }
 
 fitCanvas();
